@@ -1,0 +1,22 @@
+name: cis2mnv.venv
+
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+
+dependencies:
+  - python=3.14
+  - ipykernel
+  - pandas
+  - samtools
+  - bcftools
+  - freebayes
+  - vcflib
+  - htslib
+  - genozip
+  - pip
+  - pip:
+      - pyranges1
+      - pysam
+      - gzip

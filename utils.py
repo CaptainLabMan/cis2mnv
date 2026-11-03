@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
-
 import subprocess
+import gzip
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -51,6 +50,7 @@ def create_candidate_regions(
     vcf_filepath,
     bed_filepath=None,
     distance=3,
+    merge_overlapped_regions=False,
     only_pass_variants=True,
 ):
     variants = []
@@ -120,9 +120,14 @@ def create_candidate_regions(
                 regions.append((chrom, start, end))
                 last_end = end
 
-    regions_df = pd.DataFrame(
+    regions_pr = pr.PyRanges(pd.DataFrame(
         regions,
         columns=["Chromosome", "Start", "End"],
-    )
+    ))
 
-    return pr.PyRanges(regions_df)
+    if merge_overlapped_regions:
+        regions_pr = (regions_pr
+                      .merge_overlaps()
+                      .sort_ranges())
+
+    return regions_pr
