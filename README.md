@@ -22,6 +22,7 @@ tabix
 bcftools
 ensembl-vep
 genozip
+pyarrow
 
 https://gdc.cancer.gov/about-data/gdc-data-processing/gdc-reference-files
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-from gtf_utils import filter_gtf_by_features, keep_only_main_gtf_transcripts, filter_gtf_by_transcripts, sort_gtf, index_gtf
-import subprocess
+from gtf_utils import keep_only_main_gtf_transcripts, calculate_cds_pos, gz_to_bgz, index_gtf
 import argparse
 from pathlib import Path
 import pyranges1 as pr
@@ -16,60 +15,51 @@ args = parser.parse_args()
 main_dir = Path(args.input_gtf).parent
 
 # ==============================================================================================================
-# Создаем отдельные файлы для необходимых Features для снижения потребления оперативной памяти.
-# Скорость обработки данных при этом не увеличивается.
+# Загружаем GTF в PyRanges
 # ==============================================================================================================
-gene_sets_transcripts_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.transcripts.gtf.gz'
-gene_sets_cds_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.cds.gtf.gz'
-
-gene_sets_transcripts = filter_gtf_by_features(args.input_gtf, features=['transcript'], add_chr=True, output_gtf_filepath=gene_sets_transcripts_filepath)
-gene_sets_cds = filter_gtf_by_features(args.input_gtf, features=['CDS', 'stop_codon'], add_chr=True, output_gtf_filepath=gene_sets_cds_filepath)
+gtf_pr = pr.read_gtf(args.input_gtf, duplicate_attr=True)
 
 # ==============================================================================================================
 # Оставляем только по одному основному транскрипту на каждый ген (MANE Select/Ensembl Canonical/other + MANE_Plus_Clinical).
 # ==============================================================================================================
-gtf_pr_main_transcripts = keep_only_main_gtf_transcripts(gene_sets_transcripts) # Содержит pr только cо строками транскриптов.
-gtf_main_transcripts = set(gtf_pr_main_transcripts['transcript_id']) # Содержит set только с transcript_id.
+main_transcripts_pr = keep_only_main_gtf_transcripts(gtf_pr)
 
-# ==============================================================================================================
-# Оставляем CDS и stop_codon только по одному основному транскрипту (+ MANE_Plus_Clinical).
-# ==============================================================================================================
-gtf_pr_cds = pr.read_gtf(gene_sets_cds)
-
-# --------------------------------------------------------------------------------------------------------------
-# Оставляем только по одному основному транскрипту для каждого гена (+ MANE_Plus_Clinical).
-# --------------------------------------------------------------------------------------------------------------
-gtf_pr_cds_single_transcript = gtf_pr_cds[gtf_pr_cds['transcript_id'].isin(gtf_main_transcripts)]
-
-# --------------------------------------------------------------------------------------------------------------
-# Оставляем только основные столбцы для BED.
-# --------------------------------------------------------------------------------------------------------------
-gtf_pr_cds_single_transcript_short = gtf_pr_cds_single_transcript[['Chromosome', 'Start', 'End']]
-gtf_pr_cds_single_transcript_overlapped = (gtf_pr_cds_single_transcript_short
-                                           .merge_overlaps()
-                                           .sort_ranges())
-
-# --------------------------------------------------------------------------------------------------------------
-# Сохраняем в BED.
-# --------------------------------------------------------------------------------------------------------------
-cds_bed_filepath = main_dir / 'cds_overlapped.bed'
-gtf_pr_cds_single_transcript_overlapped.to_bed(cds_bed_filepath)
+gtf_main_transcripts = set(main_transcripts_pr['transcript_id'])
+gtf_main_gene_ids = set(main_transcripts_pr['gene_id'])
 
 # ==============================================================================================================
 # Создаем  отсортированный GTF файл включающий в себя все Feature, но только по main транскриптам.
 # ==============================================================================================================
-gtf_single_transcripts_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.single_transcripts.gtf.gz'
-filter_gtf_by_transcripts(args.input_gtf, gtf_single_transcripts_filepath, gtf_main_transcripts)
+gtf_pr_main_transcripts = gtf_pr.query('(Feature == "gene" and gene_id in @gtf_main_gene_ids) or transcript_id in @gtf_main_transcripts')
+gtf_pr_main_transcripts = gtf_pr_main_transcripts.sort_values(['Chromosome', 'Start', 'End'], kind='stable')
 
-gtf_single_transcripts_sorted_filepath = gtf_single_transcripts_filepath.removesuffix('.gz').removesuffix('.gtf') + '.sorted.gtf.gz'
-sort_gtf(gtf_single_transcripts_filepath, gtf_single_transcripts_sorted_filepath)
+gtf_main_transcripts_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.main_transcripts.tmp.gtf.gz'
+gtf_pr_main_transcripts.to_gtf(gtf_main_transcripts_filepath, compression='gzip')
 
-index_gtf(gtf_single_transcripts_sorted_filepath)
+gtf_main_transcripts_bgzipped_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf').removesuffix('.tmp') + '.main_transcripts.gtf.gz'
+gz_to_bgz(gtf_main_transcripts_filepath, gtf_main_transcripts_bgzipped_filepath)
+index_gtf(gtf_main_transcripts_bgzipped_filepath)
+
+# ==============================================================================================================
+# Оставляем CDS и stop_codon только по одному основному транскрипту (+ MANE_Plus_Clinical).
+# ==============================================================================================================
+cds_filepath = main_dir / 'cds.bed'
+
+target_features = ['CDS', 'stop_codon']
+cds_pr = gtf_pr_main_transcripts.query('Feature in @target_features')
+cds_pr.to_bed(cds_filepath)
+
+# ==============================================================================================================
+# Расчитываем начало и конец CDS/stop_codon по cds позициям, а не только по хромосомным.
+# ==============================================================================================================
+cds_pos_filepath = main_dir / 'cds_pos.parquet'
+
+cds_pr_pos = calculate_cds_pos(cds_pr)
+cds_pr_pos_short = cds_pr_pos[['Chromosome', 'Start', 'End', 'Strand', 'transcript_id', 'cds_start', 'cds_end']]
+cds_pr_pos_short.to_parquet(cds_pos_filepath, index=False, compression='snappy', engine='pyarrow')
 
 # ==============================================================================================================
 # Удаляем промежуточные файлы при необходимости.
 # ==============================================================================================================
 if args.rm_intermediate_files:
-    Path(gene_sets_cds).unlink(missing_ok=True)
-    Path(gene_sets_transcripts).unlink(missing_ok=True)
-    Path(gtf_single_transcripts_filepath).unlink(missing_ok=True)
+    Path(gtf_main_transcripts_filepath).unlink(missing_ok=True)

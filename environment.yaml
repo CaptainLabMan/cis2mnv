@@ -15,8 +15,9 @@ dependencies:
   - vcflib
   - htslib
   - genozip
+  - gzip
   - pip
   - pip:
       - pyranges1
       - pysam
-      - gzip
+      - pyarrow

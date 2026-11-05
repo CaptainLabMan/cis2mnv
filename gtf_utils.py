@@ -64,7 +64,7 @@ def filter_gtf_by_features(input_gtf_filepath: str,
     ).astype({'Start': 'int64', 'End': 'int64'})
 
 
-def keep_only_main_gtf_transcripts(gtf_input_filepath: str) -> pr.PyRanges:
+def keep_only_main_gtf_transcripts(gtf_input: str | pr.PyRanges) -> pr.PyRanges:
     # ==============================================================================================================
     # Оставляем только 1 транскрипт на каждый ген (gene_id).
     # Исключением являются гены для которых есть MANE_Plus_Clinical, у них может быть два транскрипта.
@@ -75,8 +75,14 @@ def keep_only_main_gtf_transcripts(gtf_input_filepath: str) -> pr.PyRanges:
     # Подгружаем pr содержащий только транскрипты.
     # (Можно загрузить весь и фильтрануть: Feature == "transcript")
     # --------------------------------------------------------------------------------------------------------------
-    gtf_pr_transcripts = pr.read_gtf(gtf_input_filepath, duplicate_attr=True)
-    gtf_pr_transcripts = gtf_pr_transcripts[gtf_pr_transcripts['Feature'] == 'transcript']
+    if isinstance(gtf_input, str):
+        gtf_pr_transcripts = pr.read_gtf(gtf_input, duplicate_attr=True)
+    elif isinstance(gtf_input, pr.PyRanges):
+        gtf_pr_transcripts = gtf_input
+    else:
+        raise TypeError('gtf_input must be a file path string or a PyRanges object')
+    
+    gtf_pr_transcripts = gtf_pr_transcripts[gtf_pr_transcripts['Feature'] == 'transcript'].copy()
 
     # --------------------------------------------------------------------------------------------------------------
     # Превращение тэгов в список и разбиение на разные строки (взрыв/explode).
@@ -90,6 +96,7 @@ def keep_only_main_gtf_transcripts(gtf_input_filepath: str) -> pr.PyRanges:
     tag_priority = {
         'MANE_Select': 0,
         'Ensembl_canonical': 1,
+        'RefSeq Select': 1,
         'gencode_primary': 2,
         'gencode_basic': 3,
         'CCDS': 4,
@@ -156,6 +163,11 @@ def sort_gtf(gtf_input_filepath, output_gtf_filepath):
         | grep -v '^#' \
         | LC_ALL=C sort -t $'\t' -k1,1 -k4,4n -k5,5n \
         | bgzip -c > "{output_gtf_filepath}"'''
+    subprocess.run(command, shell=True, check=True)
+
+
+def gz_to_bgz(input_filepath, output_filepath):
+    command = f'gunzip -c "{input_filepath}" | bgzip > "{output_filepath}"'
     subprocess.run(command, shell=True, check=True)
 
 

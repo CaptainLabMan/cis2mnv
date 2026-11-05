@@ -30,6 +30,7 @@ def fetch_file(link: str, output_dir: str, filename: str = None) -> Path:
     return output_path
 
 
+# index_bam
 def create_bam_index(bam_filepath):
     bam_filepath = Path(bam_filepath)
 
@@ -46,6 +47,7 @@ def create_bam_index(bam_filepath):
         )
 
 
+# create_mnv_candidate_regions
 def create_candidate_regions(
     vcf_filepath,
     bed_filepath=None,
