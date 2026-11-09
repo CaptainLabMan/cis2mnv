@@ -98,7 +98,7 @@ command = f'''freebayes \
         -t "{mnv_candidates_bed_filepath}" \
         --haplotype-length 1 \
         "{bam_filepath}" \
-        | bcftools norm -m -any {rm_dup} \
+        | bcftools norm -f {args.fasta} -m -any {rm_dup} \
         | vcffilter -f "TYPE = complex | TYPE = mnp" \
         {compression} > "{args.output_vcf}"'''
 subprocess.run(command, shell=True, check=True)
