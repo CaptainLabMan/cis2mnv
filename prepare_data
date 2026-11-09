@@ -8,9 +8,14 @@ import pyranges1 as pr
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--input_gtf', '-i', dest='input_gtf', required=True, help='Path to input GTF')
+parser.add_argument('--add_chr', dest='add_chr', action='store_true', help='Add "chr" to chromosome (chrMT > chrM)')
+parser.add_argument('--remove_chr', dest='remove_chr', action='store_true', help='Remove "chr" from chromosome (M > MT)')
 parser.add_argument('--remove_intermediate_files', '-rm', dest='rm_intermediate_files', default=1, type=int, help='Remove intermediate files: 0 or 1 (default: 1)')
 
 args = parser.parse_args()
+
+if args.add_chr and args.remove_chr:
+    raise ValueError('--add_chr and --remove_chr cannot be used together')
 
 main_dir = Path(args.input_gtf).parent
 
@@ -18,6 +23,24 @@ main_dir = Path(args.input_gtf).parent
 # Загружаем GTF в PyRanges
 # ==============================================================================================================
 gtf_pr = pr.read_gtf(args.input_gtf, duplicate_attr=True)
+
+# ==============================================================================================================
+# Добавляем или убираем chr
+# ==============================================================================================================
+
+if args.add_chr:
+    chromosomes = gtf_pr['Chromosome'].astype(str)
+    gtf_pr['Chromosome'] = (
+        'chr' + chromosomes.str.removeprefix('chr')
+    ).replace({'chrMT': 'chrM'})
+
+elif args.remove_chr:
+    gtf_pr['Chromosome'] = (
+        gtf_pr['Chromosome']
+        .astype(str)
+        .str.removeprefix('chr')
+        .replace({'M': 'MT'})
+    )
 
 # ==============================================================================================================
 # Оставляем только по одному основному транскрипту на каждый ген (MANE Select/Ensembl Canonical/other + MANE_Plus_Clinical).
@@ -36,7 +59,7 @@ gtf_pr_main_transcripts = gtf_pr_main_transcripts.sort_values(['Chromosome', 'St
 gtf_main_transcripts_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.main_transcripts.tmp.gtf.gz'
 gtf_pr_main_transcripts.to_gtf(gtf_main_transcripts_filepath, compression='gzip')
 
-gtf_main_transcripts_bgzipped_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf').removesuffix('.tmp') + '.main_transcripts.gtf.gz'
+gtf_main_transcripts_bgzipped_filepath = args.input_gtf.removesuffix('.gz').removesuffix('.gtf') + '.main_transcripts.gtf.gz'
 gz_to_bgz(gtf_main_transcripts_filepath, gtf_main_transcripts_bgzipped_filepath)
 index_gtf(gtf_main_transcripts_bgzipped_filepath)
 
@@ -47,16 +70,22 @@ cds_filepath = main_dir / 'cds.bed'
 
 target_features = ['CDS', 'stop_codon']
 cds_pr = gtf_pr_main_transcripts.query('Feature in @target_features')
-cds_pr.to_bed(cds_filepath)
+cds_pr_short = (
+    cds_pr[['Chromosome', 'Start', 'End']]
+    .merge_overlaps()
+    .sort_ranges()
+)
+cds_pr_short.to_bed(cds_filepath)
 
 # ==============================================================================================================
 # Расчитываем начало и конец CDS/stop_codon по cds позициям, а не только по хромосомным.
 # ==============================================================================================================
-cds_pos_filepath = main_dir / 'cds_pos.parquet'
+cds_table_filepath = main_dir / 'cds_table.parquet'
 
-cds_pr_pos = calculate_cds_pos(cds_pr)
-cds_pr_pos_short = cds_pr_pos[['Chromosome', 'Start', 'End', 'Strand', 'transcript_id', 'cds_start', 'cds_end']]
-cds_pr_pos_short.to_parquet(cds_pos_filepath, index=False, compression='snappy', engine='pyarrow')
+cds_table_pr = calculate_cds_pos(cds_pr)
+cds_table_pr_short = cds_table_pr[['Chromosome', 'Start', 'End', 'Strand', 'transcript_id', 'cds_start', 'cds_end']]
+cds_table_pr_short = cds_table_pr_short.sort_values(['Chromosome', 'Start', 'End']).reset_index(drop=True)
+cds_table_pr_short.to_parquet(cds_table_filepath, index=False, compression='snappy', engine='pyarrow')
 
 # ==============================================================================================================
 # Удаляем промежуточные файлы при необходимости.

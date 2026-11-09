@@ -5,65 +5,6 @@ import pysam
 import pandas as pd
 import pyranges1 as pr
 
-
-def filter_gtf_by_features(input_gtf_filepath: str,
-                           features: list | set,
-                           add_chr: bool = False,
-                           remove_chr: bool = False,
-                           output_gtf_filepath: str | None = None) -> str | pd.DataFrame:
-    
-    if add_chr and remove_chr:
-        raise ValueError("add_chr and remove_chr cannot both be True")
-
-    def chr_transition(splitted_row):
-        if add_chr:
-            if not splitted_row[0].startswith('chr'):
-                splitted_row[0] = 'chr' + splitted_row[0]
-            if splitted_row[0] == 'chrMT':
-                splitted_row[0] = 'chrM'
-        elif remove_chr:
-            splitted_row[0] = splitted_row[0].removeprefix('chr')
-            if splitted_row[0] == 'M':
-                splitted_row[0] = 'MT'
-        return splitted_row
-
-    features = set(features)
-
-    with gzip.open(input_gtf_filepath, 'rt', encoding="utf-8") as input_gtf, (pysam.BGZFile(output_gtf_filepath, 'w') if output_gtf_filepath else nullcontext()) as output_gtf:
-        selected_rows = []
-        for row in input_gtf:
-            if row.startswith('#'):
-                if output_gtf_filepath:
-                    output_gtf.write(row.encode('utf-8'))
-            else:
-                splitted_row = row.rstrip('\r\n').split('\t')
-                feature = splitted_row[2]
-                if feature in features:
-                    if add_chr or remove_chr:
-                        splitted_row = chr_transition(splitted_row)
-                    if output_gtf_filepath:
-                        output_gtf.write(('\t'.join(splitted_row) + '\n').encode("utf-8"))
-                    else:
-                        selected_rows.append(splitted_row)
-
-    if output_gtf_filepath:
-        return output_gtf_filepath
-    return pd.DataFrame(
-        selected_rows,
-        columns=[
-            'Chromosome',
-            'Source',
-            'Feature',
-            'Start',
-            'End',
-            'Score',
-            'Strand',
-            'Frame',
-            'Attributes',
-        ],
-    ).astype({'Start': 'int64', 'End': 'int64'})
-
-
 def keep_only_main_gtf_transcripts(gtf_input: str | pr.PyRanges) -> pr.PyRanges:
     # ==============================================================================================================
     # Оставляем только 1 транскрипт на каждый ген (gene_id).
@@ -135,29 +76,6 @@ def keep_only_main_gtf_transcripts(gtf_input: str | pr.PyRanges) -> pr.PyRanges:
     return gtf_pr_main_transcripts
 
 
-def filter_gtf_by_transcripts(input_gtf_filepath, output_gtf_filepath, transcripts_set) -> str:
-    '''Keeps every gene (including exon, cds etc.) only by 1 transcript (+ MANE Clinical Plus if available)'''
-    transcripts_set = set(transcripts_set)
-    with gzip.open(input_gtf_filepath, 'rt', encoding="utf-8") as input_gtf, pysam.BGZFile(output_gtf_filepath, 'w') as output_gtf:
-        for row in input_gtf:
-            if row.startswith('#'):
-                output_gtf.write(row.encode("utf-8"))
-            else:
-                splitted_row = row.split('\t')
-                feature = splitted_row[2]
-                if feature == 'gene':
-                    output_gtf.write(row.encode('utf-8'))
-                else:
-                    attributes = splitted_row[8].strip().rstrip(';').split('; ')
-                    attribute_dict = {}
-                    for attribute in attributes:
-                        key, value = attribute.split(' ', 1)
-                        attribute_dict[key] = value.strip('"')
-                    if attribute_dict.get('transcript_id') in transcripts_set:
-                        output_gtf.write(row.encode('utf-8'))
-    return output_gtf_filepath
-
-
 def sort_gtf(gtf_input_filepath, output_gtf_filepath):
     command = f'''gunzip -c "{gtf_input_filepath}" \
         | grep -v '^#' \
@@ -197,3 +115,61 @@ def calculate_cds_pos(gtf_table: pr.PyRanges) -> pr.PyRanges:
     )
 
     return pr.PyRanges(result)
+
+
+def filter_gtf_by_features(input_gtf_filepath: str,
+                           features: list | set,
+                           add_chr: bool = False,
+                           remove_chr: bool = False,
+                           output_gtf_filepath: str | None = None) -> str | pd.DataFrame:
+    
+    if add_chr and remove_chr:
+        raise ValueError("add_chr and remove_chr cannot both be True")
+
+    def chr_transition(splitted_row):
+        if add_chr:
+            if not splitted_row[0].startswith('chr'):
+                splitted_row[0] = 'chr' + splitted_row[0]
+            if splitted_row[0] == 'chrMT':
+                splitted_row[0] = 'chrM'
+        elif remove_chr:
+            splitted_row[0] = splitted_row[0].removeprefix('chr')
+            if splitted_row[0] == 'M':
+                splitted_row[0] = 'MT'
+        return splitted_row
+
+    features = set(features)
+
+    with gzip.open(input_gtf_filepath, 'rt', encoding="utf-8") as input_gtf, (pysam.BGZFile(output_gtf_filepath, 'w') if output_gtf_filepath else nullcontext()) as output_gtf:
+        selected_rows = []
+        for row in input_gtf:
+            if row.startswith('#'):
+                if output_gtf_filepath:
+                    output_gtf.write(row.encode('utf-8'))
+            else:
+                splitted_row = row.rstrip('\r\n').split('\t')
+                feature = splitted_row[2]
+                if feature in features:
+                    if add_chr or remove_chr:
+                        splitted_row = chr_transition(splitted_row)
+                    if output_gtf_filepath:
+                        output_gtf.write(('\t'.join(splitted_row) + '\n').encode("utf-8"))
+                    else:
+                        selected_rows.append(splitted_row)
+
+    if output_gtf_filepath:
+        return output_gtf_filepath
+    return pd.DataFrame(
+        selected_rows,
+        columns=[
+            'Chromosome',
+            'Source',
+            'Feature',
+            'Start',
+            'End',
+            'Score',
+            'Strand',
+            'Frame',
+            'Attributes',
+        ],
+    ).astype({'Start': 'int64', 'End': 'int64'})

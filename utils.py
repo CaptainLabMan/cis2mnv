@@ -1,5 +1,4 @@
 import subprocess
-import gzip
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -30,8 +29,7 @@ def fetch_file(link: str, output_dir: str, filename: str = None) -> Path:
     return output_path
 
 
-# index_bam
-def create_bam_index(bam_filepath):
+def index_bam(bam_filepath):
     bam_filepath = Path(bam_filepath)
 
     index_paths = [
@@ -47,16 +45,56 @@ def create_bam_index(bam_filepath):
         )
 
 
-# create_mnv_candidate_regions
-def create_candidate_regions(
+def calculate_aa_pos(chrom: str, pos: int, cds_table_df: pd.DataFrame):
+    pos_zero_based = int(pos) - 1
+
+    # Находим интервалы, содержащие позицию.
+    matched = cds_table_df.loc[
+        cds_table_df['Chromosome'].eq(chrom)
+        & cds_table_df['Start'].le(pos_zero_based)
+        & cds_table_df['End'].gt(pos_zero_based)
+    ]
+
+    # Рассчитываем смещение с учётом цепи.
+    # .where(условие, другое_значение) означает: если условие истинно — оставить исходное значение, иначе взять другое.
+    offset = (pos_zero_based - matched['Start']).where(
+        matched['Strand'].eq('+'),
+        matched['End'] - 1 - pos_zero_based,
+    )
+
+    # Получаем позиции CDS и белка.
+    matched = matched.assign(
+        variant_cds_pos=matched['cds_start'] + offset,
+        variant_protein_pos=lambda df: (df['variant_cds_pos'] - 1) // 3 + 1,
+    )
+
+    results = list(
+        matched[
+            ['transcript_id', 'variant_protein_pos']
+        ].itertuples(index=False, name=None)
+    )
+
+    return results
+
+
+def create_mnv_candidate_regions(
     vcf_filepath,
     bed_filepath=None,
-    distance=3,
-    merge_overlapped_regions=False,
-    only_pass_variants=True,
+    max_region_length=3,
+    merge_overlapped_regions=0,
+    only_pass_variants=1,
+    cds_table_filepath=None
 ):
+    cds_table_df = (pd.read_parquet(cds_table_filepath) if cds_table_filepath is not None else None)
+    if cds_table_df is not None:
+        cds_table_df = cds_table_df.astype({
+            'Chromosome': str,
+            'Start': 'int64',
+            'End': 'int64',
+            'cds_start': 'int64',
+        })
+    
     variants = []
-
     with pysam.VariantFile(vcf_filepath) as vcf:
         if bed_filepath is None:
             variant_records = vcf
@@ -82,14 +120,14 @@ def create_candidate_regions(
             if only_pass_variants and "PASS" not in variant.filter:
                 continue
 
-            if variant.stop - variant.start > distance:
+            if variant.stop - variant.start > max_region_length:
                 continue
 
             variants.append((variant.chrom, variant.start, variant.stop))
 
     df = (
         pd.DataFrame(variants, columns=["Chromosome", "Start", "End"])
-        .drop_duplicates(["Chromosome", "Start"])
+        .drop_duplicates()
         .sort_values(["Chromosome", "Start"])
     )
 
@@ -103,16 +141,31 @@ def create_candidate_regions(
 
         for i, (start, end) in enumerate(records):
             count = 1
-            limit = start + distance
+            limit = start + max_region_length
 
             for j in range(i + 1, len(records)):
                 next_start, next_end = records[j]
+
+                if next_start == start:
+                    continue
 
                 if next_start >= limit:
                     break
 
                 if next_end > limit:
                     continue
+
+                # Проверяем совпадение кодона, если передана таблица CDS.
+                if cds_table_df is not None:
+                    variant_codons = set(
+                        calculate_aa_pos(chrom, start + 1, cds_table_df)
+                    )
+                    next_variant_codons = set(
+                        calculate_aa_pos(chrom, next_start + 1, cds_table_df)
+                    )
+
+                    if not (variant_codons & next_variant_codons):
+                        continue
 
                 end = max(end, next_end)
                 count += 1
