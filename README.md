@@ -23,6 +23,7 @@ bcftools
 ensembl-vep
 genozip
 pyarrow
+biopython
 
 https://gdc.cancer.gov/about-data/gdc-data-processing/gdc-reference-files
 

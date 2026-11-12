@@ -8,7 +8,6 @@ channels:
 dependencies:
   - python=3.14
   - ipykernel
-  - pandas
   - samtools
   - bcftools
   - freebayes
@@ -18,6 +17,8 @@ dependencies:
   - gzip
   - pip
   - pip:
+      - pandas
       - pyranges1
       - pysam
       - pyarrow
+      - biopython
